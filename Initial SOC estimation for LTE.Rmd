@@ -1,0 +1,579 @@
+---
+title: "Initial SOC estimation"
+author: "Nicolas Pelletier"
+date: "2023-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+ library(foreach)
+ library(dplyr)
+ library(ggplot2)
+```
+
+# Load data
+
+```{r}
+ main.dir <- here::here()
+RunMap<- read.csv(paste0(main.dir,
+                                      "//data//prepared data//SOC-cal_RunMap_with_initSOC_Oct2023_NP.csv"))%>%
+  filter(valid==1)
+ df.raw <- read.csv(paste0(main.dir,"//data//input data//site data//LTE_Master_beta_sept_25.csv"))
+ soc.measures <- read.csv(paste0(main.dir,"//data//prepared data//IPCCT2//modelled_stocks_top_30_cm_sept28_2023.csv"))
+ climate.ipcct2 <- read.csv(paste0(main.dir,"//data//prepared data//IPCCT2//climate_prepared_ipcct2.csv"))
+ df.ipcct2 <- read.csv(paste0(main.dir,"//data//prepared data//IPCCT2//sites_prepared_ipcct2.csv"))
+ climate.RothC <- read.csv(paste0(main.dir,"//data//prepared data//RothC//climateRothC.csv"))
+```
+
+
+```{r}
+#Obtain first value for each run in the RunMap
+first.vals <- foreach(i=1:nrow(RunMap),.combine='rbind') %do% {
+   #for (i in 1:nrow(RunMap)){
+   
+   run<-RunMap[i,]
+   
+   run.name <- run$RunIndex
+   if (run$RunBy=="stock"){
+          sub.soc <- soc.measures %>%select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>% filter(UniqueStockID==run$UniqueStockID)
+   }
+   if (run$RunBy=="treatment"){
+       sub.soc <- soc.measures %>%
+       select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>%
+       filter(TrtID_Final==run$TrtID_Final) %>%
+       mutate(soc=ifelse(soc<0,NA,soc))
+       
+       
+   }
+   first.run <-sub.soc%>%arrange(year)%>%first()
+   return(first.run)
+}
+```
+
+```{r}
+# RunMap$first.SOC.measure=first.vals$soc
+# write.csv(RunMap,paste0(main.dir,
+#                           "//data//prepared data//SOC-cal_RunMap_adapted_Oct2023.csv"))
+```
+
+# Manually adjust matching experiments 
+and reload the revised data
+```{r}
+# RunMap.adapted<-read.csv(paste0(main.dir,
+#                           "//data//prepared data//SOC-cal_RunMap_adapted_Oct2023_NP.csv"))
+```
+
+Run the estimator
+```{r}
+#test<- foreach(i=1:nrow(RunMap.adapted),.combine='rbind') %do% {
+for (i in 1:nrow(RunMap.adapted)){
+    
+  run<-RunMap.adapted[i,]
+  
+  run.name <- run$RunIndex
+  
+  
+  if (run$RunBy=="stock"){
+    index=i
+    
+    sub.soc <- soc.measures %>%select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.ipcc <- df.ipcct2 %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.raw <- df.raw %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.initial <- data.frame(year=run$first.year,initial_soc=run$initial.SOC.revised)
+    sub.climate <- climate.RothC %>% filter(POLYID==sub.ipcc %>% slice(1) %>% pull(POLYID))
+    climate.normals <- sub.climate %>% group_by(month) %>% summarise_all(mean) %>% select(-year)
+    yearly.climate <- sub.climate %>% group_by(year) %>% summarise(temp=mean(tavg),precip=sum(PREC),PET=sum(PET))
+    climate.avg <- yearly.climate %>% summarise(temp=mean(temp),precip=sum(precip),PET=sum(PET))
+    
+    foo <- sub.ipcc %>% left_join(sub.soc %>% mutate(soc_source="measure"),
+                                  by="year") 
+  }
+  if (run$RunBy=="treatment"){
+    index=i
+    
+    sub.soc <- soc.measures %>%
+      select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>%
+      filter(TrtID_Final==run$TrtID_Final) %>%
+      mutate(soc=ifelse(soc<0,NA,soc))
+    
+    sub.ipcc <- df.ipcct2 %>% 
+      filter(TrtID_Final==run$TrtID_Final) %>%
+      group_by(year)%>%
+      summarise(UniqueStockID=first(UniqueStockID),
+                TrtID_Final=first(TrtID_Final),
+                POLYID=first(POLYID),
+                sand=mean(sand),
+                cinput_t=mean(cinput_t),
+                ligfrac=mean(ligfrac),
+                nfrac=mean(nfrac),
+                till=first(till),
+                irrig=mean(irrig))
+    
+    sub.raw <- df.raw %>% 
+      filter(TrtID_Final==run$TrtID_Final)
+    
+    sub.initial <- data.frame(year=run$first.year,initial_soc=run$initial.SOC.revised)
+    
+    sub.climate <- climate.RothC %>%
+      filter(POLYID==sub.ipcc %>%
+               slice(1) %>%
+               pull(POLYID))
+    
+    climate.normals <- sub.climate %>%
+      group_by(month) %>%
+      summarise_all(mean) %>%
+      select(-year)
+    
+    yearly.climate <- sub.climate %>%
+      group_by(year) %>%
+      summarise(temp=mean(tavg),precip=sum(PREC),PET=sum(PET))
+    
+    climate.avg <- yearly.climate %>%
+      summarise(temp=mean(temp),precip=sum(precip),PET=sum(PET))
+    
+    foo <- sub.ipcc %>% left_join(sub.soc  %>% mutate(soc_source="measure"),
+                                  by="year") 
+    
+  }
+    sub.soc.filter <- foo %>% 
+      filter(soc_source!="imputed" & !is.na(soc)) %>%
+      group_by(year) %>%
+      summarise(
+        soc=mean(soc,na.rm=T)
+      ) %>%
+      arrange(year)
+    
+    clay.pct<-mean(sub.raw$clay_px,na.rm=T)
+    
+    if (nrow(sub.soc.filter)>1){
+      for (j in 1:nrow(sub.soc.filter)){
+        for (k in 2:nrow(sub.soc.filter)){
+      out.sub<-data.frame(
+        init.year=sub.soc.filter$year[j],
+        next.year=sub.soc.filter$year[k],
+        init.soc=sub.soc.filter$soc[j],
+        next.soc=sub.soc.filter$soc[k],
+        till=foo$till[1],
+        theme=run$theme[1],
+        location=run$location_name[1],
+        clay=clay.pct
+        )
+      if (j==1 & k==2){out=out.sub} else {out=rbind(out,out.sub)}
+        }
+      }
+    }
+    #return(out)
+    if (i==1) { test=out } else {test=rbind(test,out)}
+  }
+
+test <- test %>% mutate(rate=(next.soc-init.soc)/(next.year-init.year),
+                        rate.percent=(next.soc/init.soc-1)/(next.year-init.year)*100,
+                        lag=next.year-init.year,
+                        delta=next.soc-init.soc) %>%
+  filter(lag>0)
+
+west<-c("Beaverlodge, Alberta",
+        "Birch Hills, Saskatchewan",
+        "Bow River, Alberta",
+        "Breton, Alberta",
+        "Ellerslie, Alberta",
+        "Elora, Ontario",
+        "Fort Vermillion, Alberta",
+        "Indian Head, Saskatchewan",
+        "Lethbridge, Alberta",
+        "Melfort, Saskatchewan",
+        "Scott, Saskatchewan",
+        "Star City, Saskatchewan",
+        "Stewart Valley, Saskatchewan",
+        "Swift Current, Saskatchewan",
+        "Three Hills, Alberta"
+)
+
+east<-c(
+  "Charlottetown, Prince Edward Island",
+  "Delhi, Ontario",
+  "Dresden, Ontario",
+  "Harrigton, Prince Edward Island",
+  "Harrow, Ontario",
+  "La Pocatiere, Quebec",
+  "L'Acadie, Quebec",
+  "Normandin, Quebec",
+  "Ottawa, Ontario",
+  "Paris, Ontario",
+  "Ridgetown, Ontario",
+  "Strathroy, Ontario",
+  "Thorndale, Ontario",
+  "Woodslee,  Ontario"
+)
+
+regions=data.frame(region=c(rep("west",length(west)),rep("east",length(east))),
+                   location=c(west,east))
+
+test <- test %>% merge(regions,by="location")
+```
+
+Plots set A : to sort
+```{r}
+
+mean_se <- function(x, mult = 3) {  
+  x <- na.omit(x)
+  se <- mult * sqrt(var(x) / length(x))
+  mean <- mean(x)
+  data.frame(y = mean, ymin = mean - 2*se, ymax = mean + 2*se)
+}
+
+ggplot(test) +geom_hline(yintercept = 0,color="lightblue",size=2) + 
+  geom_boxplot(aes(till, rate)) + 
+  theme_bw() +
+  ggtitle(expression(delta~SOC~at~any~lag))+
+  ylab(expression(SOC~rate~of~change~(T~ha^-1~yr^-1)))+
+  ylim(-3,3)
+
+ggplot(test) +geom_hline(yintercept = 0,color="lightblue",size=2) + 
+  geom_boxplot(aes(till, rate.percent)) + 
+  theme_bw() +
+  ggtitle(expression(delta~SOC~("%")~at~any~lag))+
+  ylab(expression(SOC~rate~of~change~("%"~yr^-1)))+
+  ylim(-5,5)
+
+ggplot(data=test%>%filter(till=="FT"),aes(x=lag,y=rate))+
+  facet_grid(~till,scales="free")+ 
+  ylab("mean rate of change in SOC (% per year)")+
+  stat_summary(fun.data=mean_se, geom="ribbon", alpha=0.25)+
+  geom_point(alpha=1,size=2)+
+  geom_hline(yintercept = 0)+
+  theme_classic()+
+  ylim(-10,10)
+
+ggplot(data=test%>%filter(till=="FT"),aes(x=lag,y=rate))+
+  facet_grid(~till,scales="free")+ 
+  geom_smooth(se=T) + 
+  ylab("mean rate of change in SOC (% per year)")+
+  #stat_summary(fun.data=mean_se, geom="ribbon", alpha=0.25)+
+  #geom_point(alpha=1,size=2)+
+  geom_hline(yintercept = 0)+
+  theme_classic()
+
+
+test$bin <- cut(test$lag, c(0, 10, 20, 30,40,50))
+
+test$clay <- ifelse(is.nan(test$clay),25,test$clay)
+test$clay.group <- cut(test$clay, c(0, 30, 60))
+
+ggplot(data=test%>%filter(till=="FT"),aes(x=lag,y=rate))+
+  facet_grid(~till,scales="free")+ 
+  #geom_smooth(se=FALSE) + 
+  ylab("mean rate of change in SOC (% per year)")+
+  #stat_summary(fun.data=mean_se, geom="ribbon", alpha=0.25)+
+  geom_point(aes(color=clay.group),alpha=1,size=2)+
+  theme_classic()+
+  ylim(-3,3)+
+  labs(color = "% clay")+
+  scale_color_viridis_d()
+
+ggplot(test %>% filter(till=="FT")) + geom_boxplot(aes(bin, rate.percent)) +
+  theme_bw() +
+  ggtitle("lagged rates of change in LTE SOC")+
+  ylab(expression(SOC~rate~of~change~("%")))+
+  ylim(-5,5)+
+  #facet_grid(~till)+
+  xlab("lag (years)")
+
+ggplot(test) + geom_boxplot(aes(bin, rate)) +
+  theme_bw() +
+  ggtitle("lagged rates of change in LTE SOC")+
+  ylab(expression(SOC~rate~of~change~("T ha-1 yr-1")))+
+  facet_grid(~till)+
+  xlab("lag (years)")
+```
+
+Plot set B: to sort
+```{r}
+summary.distributions <- test %>%
+  filter(till=="FT") %>%
+  group_by(bin,clay.group) %>%
+  summarise(mean=mean(rate.percent,na.rm=T),
+            sd = sd(rate.percent,na.rm=T),
+            sd2 = sd(rate.percent,na.rm=T)/2,
+            lower = quantile(rate.percent,probs = 0.025),
+            upper = quantile(rate.percent,probs = 0.975))
+
+summary.distributions$bin.min=c(0,0,10,10,20,20,30)
+summary.distributions$bin.max=c(10,10,20,20,30,30,40)
+
+for (i in unique(summary.distributions$bin)){
+sub <- test %>% filter(bin==i & till=="FT")
+
+#ggplot(sub)+geom_density(aes(x=rate))
+
+xd <- data.frame(density(sub$rate.percent)[c("x", "y")])
+p <- ggplot(xd, aes(x, y)) + 
+  
+  geom_area(data = subset(xd, x < quantile(sub$rate.percent,probs = 0.025)), fill = "red") +
+  geom_area(data = subset(xd, x > quantile(sub$rate.percent,probs = 0.975)), fill = "red") +
+  geom_vline(xintercept = quantile(sub$rate.percent,probs = 0.025),lty=2)+
+  geom_vline(xintercept = quantile(sub$rate.percent,probs = 0.975),lty=2)+
+  stat_function(fun = dnorm, args = list(mean = mean(sub$rate.percent), sd = sd(sub$rate.percent)),color='blue')+
+  geom_line()+
+  theme_classic()+
+  ylab('density')+
+  xlab('rate of change (% per year)')+
+  ggtitle(paste0("CT - bin ",i," years: from ",
+                round(quantile(sub$rate.percent,probs = 0.025),1),
+                " to ",
+                round(quantile(sub$rate.percent,probs = 0.975),1),
+                " % per year"))
+print(p)
+}
+```
+```{r}
+
+sub <- test %>% filter(till=="FT")
+  xd <- data.frame(density(sub$rate.percent)[c("x", "y")])
+  p <- ggplot(xd, aes(x, y)) + 
+    
+    geom_area(data = subset(xd, x < quantile(sub$rate.percent,probs = 0.025)), fill = "red") +
+    geom_area(data = subset(xd, x > quantile(sub$rate.percent,probs = 0.975)), fill = "red") +
+    geom_vline(xintercept = quantile(sub$rate.percent,probs = 0.025),lty=2)+
+    geom_vline(xintercept = quantile(sub$rate.percent,probs = 0.975),lty=2)+
+    stat_function(fun = dnorm, args = list(mean = mean(sub$rate.percent), sd = sd(sub$rate.percent)),color='blue')+
+    geom_line()+
+    theme_classic()+
+    ylab('density')+
+    xlab('rate of change (% per year)')+
+    ggtitle(paste0("CT - any lag: from ",
+                   round(quantile(sub$rate.percent,probs = 0.025),1),
+                   " to ",
+                   round(quantile(sub$rate.percent,probs = 0.975),1),
+                   " % per year"))
+  print(p)
+```
+
+```{r}
+
+test$bin <- cut(test$lag, seq(0,50,5))
+
+smooth.df <- test %>%
+  filter(till=="FT") %>%
+  group_by(bin,clay.group) %>%
+  summarise(mean=mean(rate.percent,na.rm=T),
+            upper=quantile(rate.percent,probs = 0.975),
+            lower=quantile(rate.percent,probs = 0.025))
+
+smooth.df <- smooth.df%>%
+  mutate(bin.mid=case_when(
+    bin==  '(5,10]' ~ 7.5,
+    bin== '(15,20]'~ 17.5,
+    bin== "(10,15]"~ 12.5,
+    bin== '(25,30]'~ 27.5,
+    bin== '(0,5]'~ 2.5,
+    bin== '(20,25]'~ 22.5,
+    bin== '(30,35]'~ 32.5,
+    bin== '(35,40]'~ 37.5,
+    bin== '(40,45]'~ 42.5,
+    bin== '(45,50]'~ 47.5))
+
+ggplot(smooth.df)+
+  geom_ribbon(aes(x=bin.mid,ymax=upper,ymin=lower,color="actual 95% CI"),alpha=0.5,fill="lightblue")+
+  geom_smooth(aes(x=bin.mid,y=lower,lty="log function of 95% CI"),se=F,method = "nls", formula = y ~ a * x^b,color='black',size=0.5)+
+  geom_smooth(aes(x=bin.mid,y=upper,lty="log function of 95% CI"),se=F,method = "nls", formula = y ~ a * x^b,color='black',size=0.5)+
+  #geom_smooth(aes(x=bin.mid,y=upper,lty="log function of 95% CI"),se=F,method = 'nls', formula = y ~ a * log(x) +b,color='black',size=0.5)+
+  #geom_smooth(aes(x=bin.mid,y=mean,lty="regression of mean"),se=F,method="lm",formula=y ~ exp(x),color='black',size=0.5)+
+  xlab("lag (years)")+
+  ggtitle("Uncertainty estimates for initial SOC")+
+  ylab(expression(SOC~rate~of~change~("%"~yr^-1)))+
+  theme_bw()+
+  theme(legend.title = element_blank())
+
+
+ggplot(smooth.df)+
+  geom_ribbon(aes(x=bin.mid,ymax=upper,ymin=lower,color="actual 95% CI"),alpha=0.5,fill="lightblue")+
+  geom_smooth(aes(x=bin.mid,y=lower,lty="log function of 95% CI"),se=F,method = "nls", formula = y ~ a * x^b,color='black',size=0.5)+
+  geom_smooth(aes(x=bin.mid,y=upper,lty="log function of 95% CI"),se=F,method = "nls", formula = y ~ a * x^b,color='black',size=0.5)+
+  geom_smooth(aes(x=bin.mid,y=mean,lty="regression of mean"),se=F,method="lm",formula=y ~ x,color='black',size=0.5)+
+  xlab("lag (years)")+
+  ggtitle("Uncertainty estimates for initial SOC")+
+  ylab(expression(SOC~rate~of~change~("%"~yr^-1)))+
+  theme_bw()+
+  theme(legend.title = element_blank())
+
+```
+
+```{r}
+missing.init <- RunMap %>% filter(is.na(initial.SOC))
+
+lag.summary<-foreach (i=1:nrow(missing.init),.combine='rbind') %do%{
+  run<-missing.init[i,]
+  
+  run.name <- run$RunIndex
+  
+  
+  if (run$RunBy=="stock"){
+    index=i
+    
+    sub.soc <- soc.measures %>%select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.ipcc <- df.ipcct2 %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.raw <- df.raw %>% filter(UniqueStockID==run$UniqueStockID)
+    sub.initial <- data.frame(year=run$first.year,initial_soc=run$initial.SOC.revised)
+    sub.climate <- climate.RothC %>% filter(POLYID==sub.ipcc %>% slice(1) %>% pull(POLYID))
+    climate.normals <- sub.climate %>% group_by(month) %>% summarise_all(mean) %>% select(-year)
+    yearly.climate <- sub.climate %>% group_by(year) %>% summarise(temp=mean(tavg),precip=sum(PREC),PET=sum(PET))
+    climate.avg <- yearly.climate %>% summarise(temp=mean(temp),precip=sum(precip),PET=sum(PET))
+    
+    foo <- sub.ipcc %>% left_join(sub.soc %>% mutate(soc_source="measure"),
+                                  by="year") 
+  }
+  if (run$RunBy=="treatment"){
+    index=i
+
+    sub.soc <- soc.measures %>%
+      select(UniqueStockID=site,Exp_ID=experiment,TrtID_Final,year,soc=modelled_SOC) %>%
+      filter(TrtID_Final==run$TrtID_Final) %>%
+      mutate(soc=ifelse(soc<0,NA,soc))
+    
+    sub.ipcc <- df.ipcct2 %>% 
+      filter(TrtID_Final==run$TrtID_Final) %>%
+      group_by(year) %>%
+      summarise(UniqueStockID=first(UniqueStockID),
+                TrtID_Final=first(TrtID_Final),
+                POLYID=first(POLYID),
+                sand=mean(sand,na.rm=T),
+                clay=mean(clay,na.rm=T),
+                cinput_t=mean(cinput_t,na.rm=T),
+                ligfrac=mean(ligfrac,na.rm=T),
+                nfrac=mean(nfrac,na.rm=T),
+                till=first(till),
+                irrig=mean(irrig,na.rm=T)) %>%
+      arrange(year)
+    
+    sub.raw <- df.raw %>% 
+      filter(TrtID_Final==run$TrtID_Final)
+    
+    sub.initial <- data.frame(year=run$first.year,initial_soc=run$initial.SOC.revised)
+    
+    sub.climate <- climate.RothC %>%
+      filter(POLYID==sub.ipcc %>%
+               slice(1) %>%
+               pull(POLYID))
+    
+    climate.normals <- sub.climate %>%
+      group_by(month) %>%
+      summarise_all(mean) %>%
+      select(-year)
+    
+    yearly.climate <- sub.climate %>%
+      group_by(year) %>%
+      summarise(temp=mean(tavg),precip=sum(PREC),PET=sum(PET))
+    
+    climate.avg <- yearly.climate %>%
+      summarise(temp=mean(temp),precip=sum(precip),PET=sum(PET))
+    
+    foo <- sub.ipcc %>% 
+        left_join(sub.soc  %>% mutate(soc_source="measure"),
+                                  by="year") 
+    
+  }
+  init.year=foo[1,]$year
+  clay.pct<-mean(sub.raw$clay_px,na.rm=T)
+  first.measure.year=foo %>% filter(!is.na(soc)) %>% summarise(year=first(year)) %>% pull(year)
+  first.measure.soc=foo %>% filter(!is.na(soc)) %>% summarise(soc=first(soc)) %>% pull(soc)
+  
+  res.foo<-data.frame(run=run$RunIndex,
+                      init.year=init.year,
+                      first.year=first.measure.year,
+                      first.measure=first.measure.soc,
+                      clay=clay.pct) %>% mutate(lag=first.year-init.year)
+  return(res.foo)
+}
+
+ggplot(lag.summary) + geom_histogram(aes(x=lag),fill='grey',color='black') + theme_bw() + xlab("lag since first measure (years)")
+
+```
+```{r}
+
+lag.pred = lag.summary %>% 
+  mutate(clay=ifelse(is.nan(clay),25,clay))%>%
+  mutate(rate_mu=case_when(lag>=0 & lag<10 & clay<30 ~ summary.distributions[3,]$mean,
+                                                    lag>=10 & lag<20 & clay<30 ~ summary.distributions[3,]$mean,
+                                                    lag>=20 & lag<30 & clay<30 ~ summary.distributions[5,]$mean,
+                                                    lag>=30  & clay<30 ~ summary.distributions[7,]$mean,
+                                                    lag>=0 & lag<10 & clay>30 ~ summary.distributions[4,]$mean,
+                                                    lag>=10 & lag<20 & clay>30 ~ summary.distributions[4,]$mean,
+                                                    lag>=20 & lag<30 & clay>30 ~ summary.distributions[6,]$mean),
+                                  rate_sd=case_when(lag>=0 & lag<10 & clay<30 ~ summary.distributions[3,]$sd2,
+                                                    lag>=10 & lag<20 & clay<30 ~ summary.distributions[3,]$sd2,
+                                                    lag>=20 & lag<30 & clay<30 ~ summary.distributions[5,]$sd2,
+                                                    lag>=30  & clay<30 ~ summary.distributions[7,]$sd2,
+                                                    lag>=0 & lag<10 & clay>30 ~ summary.distributions[4,]$sd2,
+                                                    lag>=10 & lag<20 & clay>30 ~ summary.distributions[4,]$sd2,
+                                                    lag>=20 & lag<30 & clay>30 ~ summary.distributions[6,]$sd2)) %>%
+  merge(RunMap.adapted %>% select(run=RunIndex,initial.SOC.revised),by="run")
+
+soc.timeseries <- foreach(i=1:nrow(RunMap.adapted),.combine='rbind')%do%{
+  run<-RunMap.adapted[i,]
+  if (run$RunBy=="treatment"){
+    soc.sub<-soc.measures%>%filter(TrtID_Final==run$TrtID_Final)%>%arrange(year) %>% mutate(run=run$RunIndex)
+  } else if (run$RunBy=="stock"){
+    soc.sub<-soc.measures%>%filter(site==run$UniqueStockID)%>%arrange(year) %>% mutate(run=run$RunIndex)
+  }
+  return(soc.sub)
+}
+```
+
+```{r}
+## Example plots
+for (i in 1:nrow(RunMap.adapted)){
+  
+  init.sub<-lag.pred%>%filter(run==RunMap.adapted[i,]$RunIndex)
+  soc.sub<-soc.timeseries%>%filter(run==RunMap.adapted[i,]$RunIndex)
+  
+  init.preds<- init.sub$initial.SOC.revised-init.sub$lag*rnorm(1000,mean=init.sub$rate_mu,sd=init.sub$rate_sd)/100*init.sub$initial.SOC.revised
+  
+  #hist(init.preds)
+  
+  df.preds=data.frame(soc=init.preds,
+                      year=rep(min(init.sub$init.year,soc.sub$year),length(init.preds)))
+  
+  plot.x<-ggplot()+
+    geom_boxplot(data=df.preds,aes(x=year,y=soc))+
+    geom_point(data=soc.sub,aes(x=year,y=modelled_SOC),color="red")+
+    geom_point(data=init.sub,aes(x=init.year,y=initial.SOC.revised),color="red",shape=2)+
+    ggtitle(RunMap.adapted[i,]$RunIndex)+
+    ylab(expression(SOC~(T~ha^-1~yr^-1)))+
+    theme_bw()
+  
+  print(plot.x)
+}
+
+```
+
+```{r}
+
+## Get initial SOC distributions stats for each run --> Add to RunMap.adapted
+
+lag.pred <- lag.pred %>% mutate(init.soc.mu=initial.SOC.revised-lag*rate_mu,
+                                init.soc.upper=initial.SOC.revised-lag*(rate_mu-rate_sd),
+                                init.soc.lower=initial.SOC.revised-lag*(rate_mu+rate_sd))
+
+out.table<- RunMap.adapted %>%
+  left_join(lag.pred %>% select(RunIndex=run, init.soc.mu, init.soc.lower,init.soc.upper), by="RunIndex") %>%
+  mutate(init.soc.mu= ifelse(!is.na(initial.SOC),initial.SOC,init.soc.mu), 
+         init.soc.lower= ifelse(!is.na(initial.SOC),initial.SOC,init.soc.lower),
+         init.soc.upper= ifelse(!is.na(initial.SOC),initial.SOC,init.soc.upper))
+
+write.csv(out.table, paste0(main.dir,
+                            "//data//prepared data//SOC-cal_RunMap_with_initSOC_Oct2023.csv"),row.names=F)
+```
+
+
+
+
+
+
+
+
+

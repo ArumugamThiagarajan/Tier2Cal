@@ -1,0 +1,290 @@
+---
+title: "Plot results manuscript"
+author: "Nicolas Pelletier"
+date: "2024-01-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(gridExtra)
+library(foreach)
+library(cowplot)
+```
+
+# GSA
+Load IPCC GSA - oct 2023 set 1 stock
+```{r}
+gsa_sobol<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//IPCC_set1_stock_oct2023//soboljansen_results.csv")
+
+gsa_fast99<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//IPCC_set1_stock_oct2023//fast99_results.csv")
+gsa_fast99.melt<-melt(gsa_fast99,id.vars='params')
+```
+
+Load RothC GSA - oct 2023 set 1 stock
+```{r}
+gsa_sobol<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//RothC_set1_stock_oct2023//soboljansen_results.csv")
+
+gsa_fast99<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//RothC_set1_stock_oct2023//fast99_results.csv")
+gsa_fast99.melt<-melt(gsa_fast99,id.vars='params')
+```
+
+Load ICBM GSA - oct 2023 set 1 stock
+```{r}
+gsa_sobol<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//ICBM_set1_stock_oct2023_SmallGSA//soboljansen_results.csv")
+```
+
+```{r}
+
+plot.1<-ggplot(data=gsa_sobol,aes(x=abs(SI),y=as.factor(params),fill=type,color=type))+
+  geom_bar(stat = "identity",position = 'dodge',alpha=0.5)+
+  geom_errorbarh(aes(xmin=lci,xmax=abs(uci)),position='dodge')+
+  xlim(0,0.4)+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  scale_fill_brewer(palette="Set1")+
+  ylab("parameters")+
+  xlab("Sobol Index")+
+  theme(legend.position = "none")
+
+plot.2<-ggplot(data=gsa_fast99.melt,aes(x=value,y=as.factor(params),fill=variable,color=variable))+
+  geom_bar(stat = "identity",position = 'dodge',alpha=0.5)+
+  xlim(0,0.3)+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  scale_fill_brewer(palette="Set1")+
+  ylab("parameters")+
+  xlab("FAST 99 index")+
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank())
+
+grid.arrange(plot.1,plot.2, ncol = 2)
+
+```
+# Posterior
+## IPCC
+IPCCT-2 stocks results load
+```{r}
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test11_stock_ipcc_set1_Nov2023//test11_stock_ipcc_set1_Nov2023_GSA 1200_SIR 10000To500//IPCCT2//SIR//"
+```
+
+```{r}
+posterior.all<-read.csv(paste0(main.branch,"SIR_posterior_distribution.csv"))
+posterior.east<-read.csv(paste0(main.branch,"SIR_posterior_distribution_easternONLY.csv"))
+posterior.west<-read.csv(paste0(main.branch,"SIR_posterior_distribution_westernONLY.csv"))
+posterior.till<-read.csv(paste0(main.branch,"SIR_posterior_distribution_tilONLY.csv"))
+posterior.cpr<-read.csv(paste0(main.branch,"SIR_posterior_distribution_cprONLY.csv"))
+  
+sum.stat.all<-read.csv(paste0(main.branch,"SIR_summary.csv"))
+```
+
+Load Posterior distribution
+```{r fig.height=8, fig.width=8}
+
+# Check for zero variance in each column
+non_zero_variance <- apply(posterior.all, 2, function(x) var(x) != 0)
+
+# Identify variables with non-zero variance
+variables_with_non_zero_variance <- names(non_zero_variance[non_zero_variance]) 
+
+i=variables_with_non_zero_variance[2]
+
+plot_list=list()
+for(j in 2:length(variables_with_non_zero_variance)){ 
+  i=variables_with_non_zero_variance[j]
+  dist.sub<-posterior.all%>%pull(i)
+  east.sub<-posterior.east%>%pull(i)
+  west.sub<-posterior.west%>%pull(i)
+  till.sub<-posterior.till%>%pull(i)
+  cpr.sub<-posterior.cpr%>%pull(i)
+  
+  stat.sub<-sum.stat.all%>%filter(Parameter==i)
+  
+  res.plot=rbind(data.frame(parameter=i,x=dist.sub,distribution="posterior - combined"),
+                 data.frame(parameter=i,x=east.sub,distribution="posterior - eastern"),
+                 data.frame(parameter=i,x=west.sub,distribution="posterior - western"),
+                 data.frame(parameter=i,x=till.sub,distribution="posterior - tillage"),
+                 data.frame(parameter=i,x=cpr.sub,distribution="posterior - cpr"))
+
+plot.i<-ggplot(data=res.plot,aes(x=x,color=distribution))+
+  geom_density(alpha=0.5)+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  ggtitle(i)+
+  ylab(element_blank())+
+  xlab(element_blank())+
+  geom_vline(xintercept = stat.sub$default,lty=1)+
+  geom_vline(xintercept = stat.sub$map,lty=2)+
+  geom_vline(xintercept = stat.sub$X2.5.,lty=3)+
+  geom_vline(xintercept = stat.sub$X97.5.,lty=3)+
+  theme(axis.text.x = element_text(angle=45))
+
+legend <- get_legend(plot.i)
+plot.i <- plot.i + theme(legend.position='none')
+
+
+plot_list[[j-1]] <- plot.i
+}
+
+plot_list[[j]] <- legend
+
+num_columns <- 4
+multi_panel_figure <- do.call(grid.arrange, c(plot_list, ncol = num_columns))
+
+```
+
+
+IPCCT-2 delta and cumul results load
+```{r}
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test11_stock_ipcc_set1_Nov2023//test11_stock_ipcc_set1_Nov2023_GSA 1200_SIR 10000To500//IPCCT2//SIR//"
+posterior.stock<-read.csv(paste0(main.branch,"SIR_posterior_distribution.csv"))
+sum.stat.stock<-read.csv(paste0(main.branch,"SIR_summary.csv"))
+
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test11_delta_ipcc_set1_Nov2023//test11_delta_ipcc_set1_Nov2023_GSA 1200_SIR 10000To500//IPCCT2//SIR//"
+posterior.delta<-read.csv(paste0(main.branch,"SIR_posterior_distribution.csv"))
+sum.stat.delta<-read.csv(paste0(main.branch,"SIR_summary.csv"))
+
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test11_cumul_ipcc_set1_Nov2023//test11_cumul_ipcc_set1_Nov2023_GSA 1200_SIR 10000To500//IPCCT2//SIR//"
+posterior.cumul<-read.csv(paste0(main.branch,"SIR_posterior_distribution.csv"))
+sum.stat.cumul<-read.csv(paste0(main.branch,"SIR_summary.csv"))
+```
+
+```{r fig.height=8, fig.width=8}
+for(j in 2:length(variables_with_non_zero_variance)){ 
+  i=variables_with_non_zero_variance[j]
+  dist.sub<-posterior.stock%>%pull(i)
+  delta.sub<-posterior.delta%>%pull(i)
+  cumul.sub<-posterior.cumul%>%pull(i)
+
+  stat.sub<-rbind(data.frame(parameter=i,
+                             sum.stat.stock%>%filter(Parameter==i),
+                             distribution="posterior - stocks"),
+                 data.frame(parameter=i,
+                            sum.stat.delta%>%filter(Parameter==i),
+                            distribution="posterior - delta stocks"),
+                 data.frame(parameter=i,
+                            sum.stat.cumul%>%filter(Parameter==i),
+                            distribution="posterior - cumulative stocks"))
+    
+    
+    sum.stat.all%>%filter(Parameter==i)
+  
+  res.plot=rbind(data.frame(parameter=i,x=dist.sub,distribution="posterior - stocks"),
+                 data.frame(parameter=i,x=delta.sub,distribution="posterior - delta stocks"),
+                 data.frame(parameter=i,x=cumul.sub,distribution="posterior - cumulative stocks"))
+
+plot.i<-ggplot(data=res.plot,aes(x=x,color=distribution))+
+  geom_density(alpha=0.5)+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  ggtitle(i)+
+  ylab(element_blank())+
+  xlab(element_blank())+
+  geom_vline(data=stat.sub,aes(xintercept = default))+
+  geom_vline(data=stat.sub,aes(xintercept = map,color=distribution),lty=2)+
+  theme(axis.text.x = element_text(angle=90,size=7))
+
+legend <- get_legend(plot.i)
+plot.i <- plot.i + theme(legend.position='none')
+
+plot_list[[j-1]] <- plot.i
+}
+
+# Create a common legend plot
+plot_list[[j]] <- legend
+
+
+num_columns <- 4
+multi_panel_figure <- do.call(grid.arrange, c(plot_list, ncol = num_columns))
+
+```
+
+## RothC
+
+RothC stocks results load
+```{r}
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test5_Oktoberfest_RothC_Oct2023//test5_Oktoberfest_RothC_Oct2023_GSA 1200_SIR 10000To500//RothC//SIR//"
+```
+
+```{r}
+posterior.all<-read.csv(paste0(main.branch,"SIR_posterior_distribution.csv"))
+posterior.east<-read.csv(paste0(main.branch,"SIR_posterior_distribution_easternONLY.csv"))
+posterior.west<-read.csv(paste0(main.branch,"SIR_posterior_distribution_westernONLY.csv"))
+posterior.till<-read.csv(paste0(main.branch,"SIR_posterior_distribution_tilONLY.csv"))
+posterior.cpr<-read.csv(paste0(main.branch,"SIR_posterior_distribution_cprONLY.csv"))
+  
+sum.stat.all<-read.csv(paste0(main.branch,"SIR_summary.csv"))
+```
+
+Load Posterior distribution
+```{r fig.height=3, fig.width=8}
+
+# Check for zero variance in each column
+non_zero_variance <- apply(posterior.all, 2, function(x) var(x) != 0)
+
+# Identify variables with non-zero variance
+variables_with_non_zero_variance <- names(non_zero_variance[non_zero_variance]) 
+
+i=variables_with_non_zero_variance[2]
+
+plot_list=list()
+for(j in 2:length(variables_with_non_zero_variance)){ 
+  i=variables_with_non_zero_variance[j]
+  dist.sub<-posterior.all%>%pull(i)
+  east.sub<-posterior.east%>%pull(i)
+  west.sub<-posterior.west%>%pull(i)
+  till.sub<-posterior.till%>%pull(i)
+  cpr.sub<-posterior.cpr%>%pull(i)
+  
+  stat.sub<-sum.stat.all%>%filter(Parameter==i)
+  
+  res.plot=rbind(data.frame(parameter=i,x=dist.sub,distribution="posterior - combined"),
+                 data.frame(parameter=i,x=east.sub,distribution="posterior - eastern"),
+                 data.frame(parameter=i,x=west.sub,distribution="posterior - western"),
+                 data.frame(parameter=i,x=till.sub,distribution="posterior - tillage"),
+                 data.frame(parameter=i,x=cpr.sub,distribution="posterior - cpr"))
+
+plot.i<-ggplot(data=res.plot,aes(x=x,color=distribution))+
+  geom_density(alpha=0.5)+
+  theme_minimal()+
+  scale_color_brewer(palette="Set1")+
+  ggtitle(i)+
+  ylab(element_blank())+
+  xlab(element_blank())+
+  geom_vline(xintercept = stat.sub$default,lty=1)+
+  geom_vline(xintercept = stat.sub$map,lty=2)+
+  geom_vline(xintercept = stat.sub$X2.5.,lty=3)+
+  geom_vline(xintercept = stat.sub$X97.5.,lty=3)+
+  theme(axis.text.x = element_text(angle=45))
+
+legend <- get_legend(plot.i)
+plot.i <- plot.i + theme(legend.position='none')
+
+
+plot_list[[j-1]] <- plot.i
+}
+
+plot_list[[j]] <- legend
+
+num_columns <- 4
+multi_panel_figure <- do.call(grid.arrange, c(plot_list, ncol = num_columns))
+
+```
+
+## ICBM
+
+```{r}
+main.branch<-"C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test6_Oktoberfest_ICBM_set1_Oct2023//test6_Oktoberfest_ICBM_set1_Oct2023_GSA 500_SIR 10000To500//ICBM//SIR"
+```
+
+```{r}
+Prior<-read.csv("C://Users//pelletierni//Documents//aafc-soc-cal-results//downloads//test6_Oktoberfest_ICBM_set1_Oct2023//test6_Oktoberfest_ICBM_set1_Oct2023_GSA 500_SIR 10000To500//ICBM//prior_parameter_distribution_LHS.csv")
+```
+
+```{r}
+
+```
+
+
